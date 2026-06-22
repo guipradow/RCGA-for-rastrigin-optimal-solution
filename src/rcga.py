@@ -1,0 +1,227 @@
+"""Real-coded genetic algorithm for the Rastrigin function."""
+
+from __future__ import annotations
+
+import argparse
+import random
+from dataclasses import dataclass
+from typing import NamedTuple
+
+from deap import base, creator, tools
+
+from rastrigin import GLOBAL_MINIMUM, evaluate
+
+
+DIMENSION = 10
+LOWER_BOUND = -5.0
+UPPER_BOUND = 5.0
+POPULATION_SIZE = 30
+MAX_GENERATIONS = 100_000
+ZERO_TOLERANCE = 1e-8
+
+CROSSOVER_PROBABILITY = 0.7
+MUTATION_PROBABILITY = 0.3
+
+# Bibliographic parameters:
+# eta_c follows the SBX distribution index used in icannga.pdf.
+# eta_m follows the polynomial mutation index discussed in
+# 978-3-642-35380-2_1.pdf.
+SBX_ETA = 1.0
+POLYNOMIAL_MUTATION_ETA = 20.0
+TOURNAMENT_SIZE = 3
+
+
+@dataclass(frozen=True)
+class RCGAResult:
+    """Optimization summary for one RCGA run."""
+
+    best_individual: list[float]
+    best_fitness: float
+    generations: int
+    converged: bool
+    convergence: list["ConvergencePoint"]
+
+
+class ConvergencePoint(NamedTuple):
+    """Best fitness observed at one generation."""
+
+    generation: int
+    best_fitness: float
+
+
+def ensure_deap_types() -> None:
+    """Create DEAP classes once, even when the module is reloaded."""
+    if not hasattr(creator, "FitnessMin"):
+        creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+
+    if not hasattr(creator, "Individual"):
+        creator.create("Individual", list, fitness=creator.FitnessMin)
+
+
+def build_toolbox(dimension: int) -> base.Toolbox:
+    """Configure DEAP primitives for a bounded real-coded GA."""
+    ensure_deap_types()
+
+    toolbox = base.Toolbox()
+    bounds_low = [LOWER_BOUND] * dimension
+    bounds_up = [UPPER_BOUND] * dimension
+
+    toolbox.register("gene", random.uniform, LOWER_BOUND, UPPER_BOUND)
+    toolbox.register(
+        "individual",
+        tools.initRepeat,
+        creator.Individual,
+        toolbox.gene,
+        n=dimension,
+    )
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+    toolbox.register("evaluate", evaluate)
+    toolbox.register(
+        "mate",
+        tools.cxSimulatedBinaryBounded,
+        eta=SBX_ETA,
+        low=bounds_low,
+        up=bounds_up,
+    )
+    toolbox.register(
+        "mutate",
+        tools.mutPolynomialBounded,
+        eta=POLYNOMIAL_MUTATION_ETA,
+        low=bounds_low,
+        up=bounds_up,
+        indpb=1.0 / dimension,
+    )
+    toolbox.register("select", tools.selTournament, tournsize=TOURNAMENT_SIZE)
+    return toolbox
+
+
+def evaluate_invalid_individuals(population: list, toolbox: base.Toolbox) -> int:
+    """Evaluate every individual with invalid fitness and return that count."""
+    invalid_individuals = [
+        individual for individual in population if not individual.fitness.valid
+    ]
+    fitnesses = toolbox.map(toolbox.evaluate, invalid_individuals)
+
+    for individual, fitness in zip(invalid_individuals, fitnesses):
+        individual.fitness.values = fitness
+
+    return len(invalid_individuals)
+
+
+def make_offspring(population: list, toolbox: base.Toolbox) -> list:
+    """Select, clone, recombine, and mutate a new offspring population."""
+    offspring = toolbox.select(population, len(population))
+    offspring = list(map(toolbox.clone, offspring))
+
+    for first_child, second_child in zip(offspring[::2], offspring[1::2]):
+        if random.random() <= CROSSOVER_PROBABILITY:
+            toolbox.mate(first_child, second_child)
+            del first_child.fitness.values
+            del second_child.fitness.values
+
+    for mutant in offspring:
+        if random.random() <= MUTATION_PROBABILITY:
+            toolbox.mutate(mutant)
+            del mutant.fitness.values
+
+    return offspring
+
+
+def run_rcga(
+    *,
+    dimension: int = DIMENSION,
+    population_size: int = POPULATION_SIZE,
+    max_generations: int = MAX_GENERATIONS,
+    zero_tolerance: float = ZERO_TOLERANCE,
+    seed: int | None = None,
+    checkpoints: set[int] | None = None,
+) -> RCGAResult:
+    """Optimize Rastrigin until max generations or zero tolerance is reached."""
+    if seed is not None:
+        random.seed(seed)
+
+    checkpoints = checkpoints or set()
+    toolbox = build_toolbox(dimension)
+    population = toolbox.population(n=population_size)
+    hall_of_fame = tools.HallOfFame(1)
+
+    evaluate_invalid_individuals(population, toolbox)
+    hall_of_fame.update(population)
+
+    generation = 0
+    target_fitness = GLOBAL_MINIMUM + zero_tolerance
+    convergence = [
+        ConvergencePoint(
+            generation=generation,
+            best_fitness=hall_of_fame[0].fitness.values[0],
+        )
+    ]
+
+    while generation < max_generations:
+        best_fitness = hall_of_fame[0].fitness.values[0]
+        if best_fitness <= target_fitness:
+            break
+
+        generation += 1
+        offspring = make_offspring(population, toolbox)
+        evaluate_invalid_individuals(offspring, toolbox)
+
+        population[:] = tools.selBest(population + offspring, population_size)
+        hall_of_fame.update(population)
+
+        if generation in checkpoints:
+            convergence.append(
+                ConvergencePoint(
+                    generation=generation,
+                    best_fitness=hall_of_fame[0].fitness.values[0],
+                )
+            )
+
+    best = hall_of_fame[0]
+    best_fitness = best.fitness.values[0]
+    if convergence[-1].generation != generation:
+        convergence.append(
+            ConvergencePoint(generation=generation, best_fitness=best_fitness)
+        )
+
+    return RCGAResult(
+        best_individual=list(best),
+        best_fitness=best_fitness,
+        generations=generation,
+        converged=best_fitness <= target_fitness,
+        convergence=convergence,
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Optimize the Rastrigin function with an RCGA."
+    )
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--dimension", type=int, default=DIMENSION)
+    parser.add_argument("--population-size", type=int, default=POPULATION_SIZE)
+    parser.add_argument("--max-generations", type=int, default=MAX_GENERATIONS)
+    parser.add_argument("--zero", type=float, default=ZERO_TOLERANCE)
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Run one RCGA optimization and print the best result."""
+    args = parse_args()
+    result = run_rcga(
+        dimension=args.dimension,
+        population_size=args.population_size,
+        max_generations=args.max_generations,
+        zero_tolerance=args.zero,
+        seed=args.seed,
+    )
+
+    print(f"Best fitness: {result.best_fitness:.12g}")
+    print(f"Generations: {result.generations}")
+    print(f"Converged: {result.converged}")
+    print(f"Best individual: {result.best_individual}")
+
+
+if __name__ == "__main__":
+    main()

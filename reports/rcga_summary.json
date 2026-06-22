@@ -1,0 +1,16 @@
+{
+  "runs": 21,
+  "dimension": 10,
+  "population_size": 30,
+  "max_generations": 100000,
+  "zero_tolerance": 1e-08,
+  "best": 2.507889007574704e-09,
+  "mean": 8.483539272133168e-08,
+  "max": 2.5956924787351454e-07,
+  "std": 8.882698521508086e-08,
+  "error_best": 2.507889007574704e-09,
+  "error_mean": 8.483539272133168e-08,
+  "error_max": 2.5956924787351454e-07,
+  "error_std": 8.882698521508086e-08,
+  "converged_runs": 3
+}
