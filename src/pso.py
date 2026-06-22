@@ -1,18 +1,17 @@
-"""Canonical particle swarm optimization for the Rastrigin function."""
+"""Canonical particle swarm optimization for benchmark functions."""
 
 from __future__ import annotations
 
+import multiprocessing
 from dataclasses import dataclass
 
 import numpy as np
 from pyswarms.single import GlobalBestPSO
 
-from rastrigin import GLOBAL_MINIMUM
+from objectives import DEFAULT_OBJECTIVE, ObjectiveFunction
 from rcga import (
     DIMENSION,
-    LOWER_BOUND,
     POPULATION_SIZE,
-    UPPER_BOUND,
     ConvergencePoint,
 )
 
@@ -33,15 +32,6 @@ class PSOResult:
     convergence: list[ConvergencePoint]
 
 
-def rastrigin_swarm(positions: np.ndarray) -> np.ndarray:
-    """Evaluate Rastrigin for a swarm position matrix."""
-    dimensions = positions.shape[1]
-    return 10.0 * dimensions + np.sum(
-        positions**2 - 10.0 * np.cos(2.0 * np.pi * positions),
-        axis=1,
-    )
-
-
 def run_pso(
     *,
     dimension: int = DIMENSION,
@@ -49,16 +39,18 @@ def run_pso(
     max_generations: int,
     zero_tolerance: float,
     seed: int | None = None,
+    objective: ObjectiveFunction = DEFAULT_OBJECTIVE,
+    processes: int = 1,
     checkpoints: set[int] | None = None,
 ) -> PSOResult:
-    """Optimize Rastrigin with canonical global-best PSO."""
+    """Optimize an objective with canonical global-best PSO."""
     if seed is not None:
         np.random.seed(seed)
 
     checkpoints = checkpoints or set()
     bounds = (
-        np.full(dimension, LOWER_BOUND),
-        np.full(dimension, UPPER_BOUND),
+        np.full(dimension, objective.lower_bound),
+        np.full(dimension, objective.upper_bound),
     )
     options = {
         "c1": CANONICAL_COGNITIVE,
@@ -72,14 +64,19 @@ def run_pso(
         options=options,
         bounds=bounds,
     )
+    n_processes = None
+    if processes != 1:
+        n_processes = multiprocessing.cpu_count() if processes == 0 else processes
+
     best_fitness, best_individual = optimizer.optimize(
-        rastrigin_swarm,
+        objective.swarm,
         iters=max_generations,
+        n_processes=n_processes,
         verbose=False,
     )
 
     convergence = []
-    target_fitness = GLOBAL_MINIMUM + zero_tolerance
+    target_fitness = objective.global_minimum + zero_tolerance
     best_generation = max_generations
     for index, fitness in enumerate(optimizer.cost_history, start=1):
         if index in checkpoints:

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import random
 from dataclasses import dataclass
+from functools import partial
 from typing import NamedTuple
 
 from deap import base, creator, tools
 
-from rastrigin import GLOBAL_MINIMUM, evaluate
+from objectives import DEFAULT_OBJECTIVE, OBJECTIVES, ObjectiveFunction
 
 
 DIMENSION = 10
@@ -29,6 +31,11 @@ MUTATION_PROBABILITY = 0.3
 SBX_ETA = 1.0
 POLYNOMIAL_MUTATION_ETA = 20.0
 TOURNAMENT_SIZE = 3
+
+
+def evaluate_objective(individual: list[float], objective: ObjectiveFunction) -> tuple[float]:
+    """Return a DEAP-compatible single-objective fitness tuple."""
+    return (objective.scalar(individual),)
 
 
 @dataclass(frozen=True)
@@ -58,15 +65,18 @@ def ensure_deap_types() -> None:
         creator.create("Individual", list, fitness=creator.FitnessMin)
 
 
-def build_toolbox(dimension: int) -> base.Toolbox:
+def build_toolbox(
+    dimension: int,
+    objective: ObjectiveFunction = DEFAULT_OBJECTIVE,
+) -> base.Toolbox:
     """Configure DEAP primitives for a bounded real-coded GA."""
     ensure_deap_types()
 
     toolbox = base.Toolbox()
-    bounds_low = [LOWER_BOUND] * dimension
-    bounds_up = [UPPER_BOUND] * dimension
+    bounds_low = [objective.lower_bound] * dimension
+    bounds_up = [objective.upper_bound] * dimension
 
-    toolbox.register("gene", random.uniform, LOWER_BOUND, UPPER_BOUND)
+    toolbox.register("gene", random.uniform, objective.lower_bound, objective.upper_bound)
     toolbox.register(
         "individual",
         tools.initRepeat,
@@ -75,7 +85,7 @@ def build_toolbox(dimension: int) -> base.Toolbox:
         n=dimension,
     )
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-    toolbox.register("evaluate", evaluate)
+    toolbox.register("evaluate", partial(evaluate_objective, objective=objective))
     toolbox.register(
         "mate",
         tools.cxSimulatedBinaryBounded,
@@ -134,55 +144,67 @@ def run_rcga(
     max_generations: int = MAX_GENERATIONS,
     zero_tolerance: float = ZERO_TOLERANCE,
     seed: int | None = None,
+    objective: ObjectiveFunction = DEFAULT_OBJECTIVE,
+    processes: int = 1,
     checkpoints: set[int] | None = None,
 ) -> RCGAResult:
-    """Optimize Rastrigin until max generations or zero tolerance is reached."""
+    """Optimize an objective until max generations or zero tolerance is reached."""
     if seed is not None:
         random.seed(seed)
 
     checkpoints = checkpoints or set()
-    toolbox = build_toolbox(dimension)
+    toolbox = build_toolbox(dimension, objective)
+    pool = None
+    if processes != 1:
+        pool = multiprocessing.Pool(processes=processes if processes > 0 else None)
+        toolbox.register("map", pool.map)
+
     population = toolbox.population(n=population_size)
     hall_of_fame = tools.HallOfFame(1)
 
-    evaluate_invalid_individuals(population, toolbox)
-    hall_of_fame.update(population)
-
-    generation = 0
-    target_fitness = GLOBAL_MINIMUM + zero_tolerance
-    convergence = [
-        ConvergencePoint(
-            generation=generation,
-            best_fitness=hall_of_fame[0].fitness.values[0],
-        )
-    ]
-
-    while generation < max_generations:
-        best_fitness = hall_of_fame[0].fitness.values[0]
-        if best_fitness <= target_fitness:
-            break
-
-        generation += 1
-        offspring = make_offspring(population, toolbox)
-        evaluate_invalid_individuals(offspring, toolbox)
-
-        population[:] = tools.selBest(population + offspring, population_size)
+    try:
+        evaluate_invalid_individuals(population, toolbox)
         hall_of_fame.update(population)
 
-        if generation in checkpoints:
-            convergence.append(
-                ConvergencePoint(
-                    generation=generation,
-                    best_fitness=hall_of_fame[0].fitness.values[0],
-                )
+        generation = 0
+        target_fitness = objective.global_minimum + zero_tolerance
+        convergence = [
+            ConvergencePoint(
+                generation=generation,
+                best_fitness=hall_of_fame[0].fitness.values[0],
             )
+        ]
 
-    best = hall_of_fame[0]
-    best_fitness = best.fitness.values[0]
-    if convergence[-1].generation != generation:
-        convergence.append(
-            ConvergencePoint(generation=generation, best_fitness=best_fitness)
-        )
+        while generation < max_generations:
+            best_fitness = hall_of_fame[0].fitness.values[0]
+            if best_fitness <= target_fitness:
+                break
+
+            generation += 1
+            offspring = make_offspring(population, toolbox)
+            evaluate_invalid_individuals(offspring, toolbox)
+
+            population[:] = tools.selBest(population + offspring, population_size)
+            hall_of_fame.update(population)
+
+            if generation in checkpoints:
+                convergence.append(
+                    ConvergencePoint(
+                        generation=generation,
+                        best_fitness=hall_of_fame[0].fitness.values[0],
+                    )
+                )
+
+        best = hall_of_fame[0]
+        best_fitness = best.fitness.values[0]
+        if convergence[-1].generation != generation:
+            convergence.append(
+                ConvergencePoint(generation=generation, best_fitness=best_fitness)
+            )
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
 
     return RCGAResult(
         best_individual=list(best),
@@ -203,6 +225,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--population-size", type=int, default=POPULATION_SIZE)
     parser.add_argument("--max-generations", type=int, default=MAX_GENERATIONS)
     parser.add_argument("--zero", type=float, default=ZERO_TOLERANCE)
+    parser.add_argument(
+        "--processes",
+        type=int,
+        default=1,
+        help="Number of worker processes for fitness evaluation; 1 disables multiprocessing, 0 uses all available cores.",
+    )
+    parser.add_argument(
+        "--objective",
+        choices=sorted(OBJECTIVES),
+        default=DEFAULT_OBJECTIVE.key,
+    )
     return parser.parse_args()
 
 
@@ -215,6 +248,8 @@ def main() -> None:
         max_generations=args.max_generations,
         zero_tolerance=args.zero,
         seed=args.seed,
+        objective=OBJECTIVES[args.objective],
+        processes=args.processes,
     )
 
     print(f"Best fitness: {result.best_fitness:.12g}")
