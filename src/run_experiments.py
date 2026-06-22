@@ -37,6 +37,7 @@ def write_convergence_report(results: list[dict], reports_dir: Path) -> None:
     fieldnames = [
         "algorithm",
         "run",
+        "seed",
         "checkpoint_generation",
         "recorded_generation",
         "best_fitness",
@@ -70,6 +71,7 @@ def write_convergence_report(results: list[dict], reports_dir: Path) -> None:
                     {
                         "algorithm": result["algorithm"],
                         "run": result["run"],
+                        "seed": result["seed"],
                         "checkpoint_generation": checkpoint,
                         "recorded_generation": recorded_generation,
                         "best_fitness": f"{best_fitness:.16g}",
@@ -85,6 +87,7 @@ def write_final_results(results: list[dict], reports_dir: Path) -> None:
     fieldnames = [
         "algorithm",
         "run",
+        "seed",
         "best_fitness",
         "error",
         "generations",
@@ -101,6 +104,7 @@ def write_final_results(results: list[dict], reports_dir: Path) -> None:
                 {
                     "algorithm": result["algorithm"],
                     "run": result["run"],
+                    "seed": result["seed"],
                     "best_fitness": f"{result['best_fitness']:.16g}",
                     "error": f"{result['best_fitness'] - GLOBAL_MINIMUM:.16g}",
                     "generations": result["generations"],
@@ -250,6 +254,7 @@ def write_error_violin_plot(results: list[dict], reports_dir: Path) -> None:
 
 def run_experiments(
     runs: int,
+    base_seed: int,
     reports_dir: Path,
     max_generations: int,
     zero_tolerance: float,
@@ -259,14 +264,17 @@ def run_experiments(
     results = []
 
     for run_number in range(1, runs + 1):
+        seed = base_seed + run_number - 1
         result = run_rcga(
             max_generations=max_generations,
             zero_tolerance=zero_tolerance,
+            seed=seed,
             checkpoints=set(CHECKPOINTS),
         )
         results.append(
             {
                 "run": run_number,
+                "seed": seed,
                 "algorithm": "RCGA",
                 "best_individual": result.best_individual,
                 "best_fitness": result.best_fitness,
@@ -279,20 +287,24 @@ def run_experiments(
         )
         print(
             f"RCGA run {run_number:02d}/{runs}: "
+            f"seed={seed}, "
             f"best={result.best_fitness:.12g}, "
             f"generations={result.generations}, "
             f"converged={result.converged}"
         )
 
     for run_number in range(1, runs + 1):
+        seed = base_seed + run_number - 1
         result = run_pso(
             max_generations=max_generations,
             zero_tolerance=zero_tolerance,
+            seed=seed,
             checkpoints=set(CHECKPOINTS),
         )
         results.append(
             {
                 "run": run_number,
+                "seed": seed,
                 "algorithm": "PSO",
                 "best_individual": result.best_individual,
                 "best_fitness": result.best_fitness,
@@ -305,6 +317,7 @@ def run_experiments(
         )
         print(
             f"PSO run {run_number:02d}/{runs}: "
+            f"seed={seed}, "
             f"best={result.best_fitness:.12g}, "
             f"generations={result.generations}, "
             f"converged={result.converged}"
@@ -323,6 +336,7 @@ def parse_args() -> argparse.Namespace:
         description="Run 21 RCGA repetitions and save reports."
     )
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
+    parser.add_argument("--base-seed", type=int, default=1)
     parser.add_argument("--reports-dir", type=Path, default=DEFAULT_REPORTS_DIR)
     parser.add_argument("--max-generations", type=int, default=MAX_GENERATIONS)
     parser.add_argument("--zero", type=float, default=ZERO_TOLERANCE)
@@ -334,6 +348,7 @@ def main() -> None:
     args = parse_args()
     run_experiments(
         runs=args.runs,
+        base_seed=args.base_seed,
         reports_dir=args.reports_dir,
         max_generations=args.max_generations,
         zero_tolerance=args.zero,

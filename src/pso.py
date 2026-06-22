@@ -48,9 +48,13 @@ def run_pso(
     population_size: int = POPULATION_SIZE,
     max_generations: int,
     zero_tolerance: float,
+    seed: int | None = None,
     checkpoints: set[int] | None = None,
 ) -> PSOResult:
     """Optimize Rastrigin with canonical global-best PSO."""
+    if seed is not None:
+        np.random.seed(seed)
+
     checkpoints = checkpoints or set()
     bounds = (
         np.full(dimension, LOWER_BOUND),
