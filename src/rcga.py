@@ -68,6 +68,8 @@ def ensure_deap_types() -> None:
 def build_toolbox(
     dimension: int,
     objective: ObjectiveFunction = DEFAULT_OBJECTIVE,
+    eta_c: float = SBX_ETA,
+    eta_m: float = POLYNOMIAL_MUTATION_ETA,
 ) -> base.Toolbox:
     """Configure DEAP primitives for a bounded real-coded GA."""
     ensure_deap_types()
@@ -89,14 +91,14 @@ def build_toolbox(
     toolbox.register(
         "mate",
         tools.cxSimulatedBinaryBounded,
-        eta=SBX_ETA,
+        eta=eta_c,
         low=bounds_low,
         up=bounds_up,
     )
     toolbox.register(
         "mutate",
         tools.mutPolynomialBounded,
-        eta=POLYNOMIAL_MUTATION_ETA,
+        eta=eta_m,
         low=bounds_low,
         up=bounds_up,
         indpb=1.0 / dimension,
@@ -118,19 +120,24 @@ def evaluate_invalid_individuals(population: list, toolbox: base.Toolbox) -> int
     return len(invalid_individuals)
 
 
-def make_offspring(population: list, toolbox: base.Toolbox) -> list:
+def make_offspring(
+    population: list,
+    toolbox: base.Toolbox,
+    crossover_probability: float = CROSSOVER_PROBABILITY,
+    mutation_probability: float = MUTATION_PROBABILITY,
+) -> list:
     """Select, clone, recombine, and mutate a new offspring population."""
     offspring = toolbox.select(population, len(population))
     offspring = list(map(toolbox.clone, offspring))
 
     for first_child, second_child in zip(offspring[::2], offspring[1::2]):
-        if random.random() <= CROSSOVER_PROBABILITY:
+        if random.random() <= crossover_probability:
             toolbox.mate(first_child, second_child)
             del first_child.fitness.values
             del second_child.fitness.values
 
     for mutant in offspring:
-        if random.random() <= MUTATION_PROBABILITY:
+        if random.random() <= mutation_probability:
             toolbox.mutate(mutant)
             del mutant.fitness.values
 
@@ -147,13 +154,17 @@ def run_rcga(
     objective: ObjectiveFunction = DEFAULT_OBJECTIVE,
     processes: int = 1,
     checkpoints: set[int] | None = None,
+    crossover_probability: float = CROSSOVER_PROBABILITY,
+    mutation_probability: float = MUTATION_PROBABILITY,
+    eta_c: float = SBX_ETA,
+    eta_m: float = POLYNOMIAL_MUTATION_ETA,
 ) -> RCGAResult:
     """Optimize an objective until max generations or zero tolerance is reached."""
     if seed is not None:
         random.seed(seed)
 
     checkpoints = checkpoints or set()
-    toolbox = build_toolbox(dimension, objective)
+    toolbox = build_toolbox(dimension, objective, eta_c=eta_c, eta_m=eta_m)
     pool = None
     if processes != 1:
         pool = multiprocessing.Pool(processes=processes if processes > 0 else None)
@@ -181,7 +192,12 @@ def run_rcga(
                 break
 
             generation += 1
-            offspring = make_offspring(population, toolbox)
+            offspring = make_offspring(
+                population,
+                toolbox,
+                crossover_probability=crossover_probability,
+                mutation_probability=mutation_probability,
+            )
             evaluate_invalid_individuals(offspring, toolbox)
 
             population[:] = tools.selBest(population + offspring, population_size)
@@ -225,6 +241,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--population-size", type=int, default=POPULATION_SIZE)
     parser.add_argument("--max-generations", type=int, default=MAX_GENERATIONS)
     parser.add_argument("--zero", type=float, default=ZERO_TOLERANCE)
+    parser.add_argument("--cxpb", type=float, default=CROSSOVER_PROBABILITY)
+    parser.add_argument("--mutpb", type=float, default=MUTATION_PROBABILITY)
+    parser.add_argument("--eta-c", type=float, default=SBX_ETA)
+    parser.add_argument("--eta-m", type=float, default=POLYNOMIAL_MUTATION_ETA)
     parser.add_argument(
         "--processes",
         type=int,
@@ -250,6 +270,10 @@ def main() -> None:
         seed=args.seed,
         objective=OBJECTIVES[args.objective],
         processes=args.processes,
+        crossover_probability=args.cxpb,
+        mutation_probability=args.mutpb,
+        eta_c=args.eta_c,
+        eta_m=args.eta_m,
     )
 
     print(f"Best fitness: {result.best_fitness:.12g}")

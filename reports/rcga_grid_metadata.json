@@ -1,0 +1,13 @@
+{
+  "best_rcga_parameters": {
+    "cxpb": 0.8,
+    "mutpb": 0.4,
+    "eta_c": 1.0,
+    "eta_m": 50.0
+  },
+  "grid_runs_per_combination": 3,
+  "comparison_runs": 21,
+  "max_generations": 100000,
+  "dimension": 10,
+  "population_size": 30
+}
